@@ -9,15 +9,21 @@ video or audio — no CLI flags. Graphite dark theme.
 Grab a self-contained binary from the [Releases](../../releases) page (Python
 and ffmpeg bundled — nothing else to install):
 
-- **Windows:** `ytdl-gui-windows.exe`
-- **Linux:** `ytdl-gui-linux` -> `chmod +x ytdl-gui-linux && ./ytdl-gui-linux`
+- **Windows:** download and run `ytdl-gui-windows.exe`.
+- **Linux:** download `ytdl-gui-linux`, then:
+
+  ```bash
+  chmod +x ytdl-gui-linux
+  ./ytdl-gui-linux
+  ```
 
 ## Usage
 
-- **Paste a URL** -> Enter to load its formats. **Type a title** -> search
-  (YouTube or SoundCloud via the dropdown) and click a result card.
-- **Best video** (mp4) or **Best audio** in the chosen format (MP3 / M4A /
-  Opus / FLAC / WAV / Original). Or pick a row and **Download selected**.
+1. **Find something.** Paste a URL and press Enter, or type a title to search
+   (YouTube or SoundCloud, selectable from the dropdown) and click a result.
+2. **Download it.** Use **Best video** (mp4) or **Best audio** in your chosen
+   format (MP3, M4A, Opus, FLAC, WAV, or Original). For a specific stream, pick
+   a row in the table and use **Download selected**.
 
 ## Run from source
 
@@ -34,7 +40,7 @@ Requires Python 3.10+ and [ffmpeg](https://ffmpeg.org/) on your PATH.
 ```bash
 pip install -r requirements.txt pyinstaller
 export FFMPEG_BIN=$(command -v ffmpeg)   # optional: bundle ffmpeg
-pyinstaller --noconfirm ytdl-gui.spec    # -> dist/ytdl-gui[.exe]
+pyinstaller --noconfirm ytdl-gui.spec    # output in dist/
 ```
 
 Pushing a `v*` tag builds Windows + Linux binaries via GitHub Actions and
