@@ -1,8 +1,4 @@
-"""Thin wrapper around yt-dlp's in-process API.
-
-Keeping all yt-dlp interaction here means the GUI layer never imports yt_dlp
-directly and stays easy to reason about.
-"""
+"""yt-dlp interaction, isolated from the GUI layer."""
 
 from __future__ import annotations
 
@@ -11,32 +7,34 @@ from dataclasses import dataclass
 
 import yt_dlp
 
-# Maps the GUI source picker to yt-dlp's search prefix.
 SEARCH_PREFIXES = {
     "YouTube": "ytsearch",
     "SoundCloud": "scsearch",
 }
 
-_URL_RE = re.compile(r"^(https?://|www\.)", re.IGNORECASE)
-
-# Optional directory containing a bundled ffmpeg/ffprobe. Set by the app at
-# startup when shipping a self-contained binary; otherwise yt-dlp uses PATH.
 FFMPEG_LOCATION: str | None = None
+
+_URL_RE = re.compile(r"^(https?://|www\.)", re.IGNORECASE)
+_BASE_OPTS = {"quiet": True, "no_warnings": True}
 
 
 def looks_like_url(text: str) -> bool:
-    """Heuristic: is this a link to fetch, or a phrase to search for?"""
     text = text.strip()
     if _URL_RE.match(text):
         return True
-    # Bare domain with a path and no spaces, e.g. youtube.com/watch?v=...
     return " " not in text and "." in text and "/" in text
+
+
+def _format_duration(seconds: int | None) -> str:
+    if not seconds:
+        return "?"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
 @dataclass
 class Format:
-    """A single downloadable format, flattened for display."""
-
     format_id: str
     ext: str
     resolution: str
@@ -51,9 +49,7 @@ class Format:
         if not self.filesize:
             return "?"
         mb = self.filesize / (1024 * 1024)
-        if mb >= 1024:
-            return f"{mb / 1024:.2f} GB"
-        return f"{mb:.1f} MB"
+        return f"{mb / 1024:.2f} GB" if mb >= 1024 else f"{mb:.1f} MB"
 
     @property
     def kind(self) -> str:
@@ -70,8 +66,6 @@ class Format:
 
 @dataclass
 class VideoInfo:
-    """Metadata for a queried URL, plus its available formats."""
-
     title: str
     uploader: str
     duration: int | None
@@ -81,19 +75,11 @@ class VideoInfo:
 
     @property
     def duration_str(self) -> str:
-        if not self.duration:
-            return "?"
-        m, s = divmod(int(self.duration), 60)
-        h, m = divmod(m, 60)
-        if h:
-            return f"{h}:{m:02d}:{s:02d}"
-        return f"{m}:{s:02d}"
+        return _format_duration(self.duration)
 
 
 @dataclass
 class SearchResult:
-    """A single hit from a title/keyword search."""
-
     title: str
     uploader: str
     duration: int | None
@@ -102,46 +88,41 @@ class SearchResult:
 
     @property
     def duration_str(self) -> str:
-        if not self.duration:
-            return "?"
-        m, s = divmod(int(self.duration), 60)
-        h, m = divmod(m, 60)
-        if h:
-            return f"{h}:{m:02d}:{s:02d}"
-        return f"{m}:{s:02d}"
+        return _format_duration(self.duration)
 
 
 def _pick_thumbnail(entry: dict) -> str | None:
-    """Choose a reasonably sized thumbnail URL from a search entry."""
     thumbs = entry.get("thumbnails") or []
     if thumbs:
-        # yt-dlp orders these small -> large; the first is card-sized (~360w).
         return thumbs[0].get("url")
     return entry.get("thumbnail")
 
 
-def search(query_text: str, source: str = "YouTube", limit: int = 15) -> list[SearchResult]:
-    """Search by title/keywords and return lightweight result rows.
+def _resolution(fmt: dict) -> str:
+    if fmt.get("resolution"):
+        return fmt["resolution"]
+    if fmt.get("height"):
+        return f"{fmt['height']}p"
+    return "audio"
 
-    Uses flat extraction so we get a fast list without resolving every video's
-    full format list (that happens later via `query` when one is picked).
-    """
+
+def search(query_text: str, source: str = "YouTube", limit: int = 15) -> list[SearchResult]:
+    """Return lightweight search hits via fast flat extraction."""
     prefix = SEARCH_PREFIXES.get(source, "ytsearch")
-    opts = {"quiet": True, "no_warnings": True, "extract_flat": True}
+    opts = {**_BASE_OPTS, "extract_flat": True}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(f"{prefix}{limit}:{query_text}", download=False)
 
-    results: list[SearchResult] = []
-    for e in info.get("entries", []) or []:
+    results = []
+    for e in info.get("entries") or []:
         if not e:
             continue
-        url = e.get("url") or e.get("webpage_url") or e.get("id")
         results.append(
             SearchResult(
                 title=e.get("title", "Untitled"),
                 uploader=e.get("uploader") or e.get("channel") or "",
                 duration=e.get("duration"),
-                url=url,
+                url=e.get("url") or e.get("webpage_url") or e.get("id"),
                 thumbnail=_pick_thumbnail(e),
             )
         )
@@ -149,36 +130,32 @@ def search(query_text: str, source: str = "YouTube", limit: int = 15) -> list[Se
 
 
 def query(url: str) -> VideoInfo:
-    """Fetch metadata and formats for a URL without downloading anything."""
-    opts = {"quiet": True, "no_warnings": True, "noplaylist": True}
+    """Fetch metadata and available formats without downloading."""
+    opts = {**_BASE_OPTS, "noplaylist": True}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
-    # A playlist/channel URL yields entries; just take the first item.
     if info.get("_type") == "playlist" and info.get("entries"):
         info = info["entries"][0]
 
-    formats: list[Format] = []
-    for f in info.get("formats", []):
-        formats.append(
-            Format(
-                format_id=f.get("format_id", "?"),
-                ext=f.get("ext", "?"),
-                resolution=f.get("resolution") or (f.get("height") and f"{f['height']}p") or "audio",
-                fps=str(f.get("fps") or ""),
-                vcodec=f.get("vcodec", "none"),
-                acodec=f.get("acodec", "none"),
-                filesize=f.get("filesize") or f.get("filesize_approx"),
-                note=f.get("format_note", "") or "",
-            )
+    formats = [
+        Format(
+            format_id=f.get("format_id", "?"),
+            ext=f.get("ext", "?"),
+            resolution=_resolution(f),
+            fps=str(f.get("fps") or ""),
+            vcodec=f.get("vcodec", "none"),
+            acodec=f.get("acodec", "none"),
+            filesize=f.get("filesize") or f.get("filesize_approx"),
+            note=f.get("format_note") or "",
         )
-
-    # Largest/best formats last from yt-dlp; show best first.
+        for f in info.get("formats", [])
+    ]
     formats.reverse()
 
     return VideoInfo(
         title=info.get("title", "Untitled"),
-        uploader=info.get("uploader", "") or "",
+        uploader=info.get("uploader") or "",
         duration=info.get("duration"),
         thumbnail=info.get("thumbnail"),
         webpage_url=info.get("webpage_url", url),
@@ -195,19 +172,16 @@ def download(
     extract_audio: bool = False,
     audio_codec: str = "mp3",
 ) -> None:
-    """Download `url` using format selector `fmt` into `outdir`.
+    """Download `url` with selector `fmt` into `outdir`.
 
-    `progress_hook` receives yt-dlp's status dicts on the calling thread.
-    When `extract_audio` is set, the result is transcoded to `audio_codec`
-    (e.g. mp3) at the best quality via ffmpeg.
+    When `extract_audio` is set, transcode to `audio_codec` at best quality.
     """
     opts = {
+        **_BASE_OPTS,
         "format": fmt,
         "outtmpl": f"{outdir}/%(title)s.%(ext)s",
         "progress_hooks": [progress_hook],
         "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
     }
     if postprocessor_hook is not None:
         opts["postprocessor_hooks"] = [postprocessor_hook]
@@ -219,11 +193,10 @@ def download(
             {
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": audio_codec,
-                "preferredquality": "0",  # 0 = best VBR for mp3
+                "preferredquality": "0",
             }
         ]
     else:
-        # Merge to mp4 when combining separate video+audio streams.
         opts["merge_output_format"] = "mp4"
 
     with yt_dlp.YoutubeDL(opts) as ydl:

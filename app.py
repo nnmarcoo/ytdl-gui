@@ -1,8 +1,6 @@
-"""PySide6 GUI for yt-dlp: search or paste a URL, browse with thumbnails,
-pick a format, and download with live progress.
+"""PySide6 GUI for yt-dlp: search or paste a URL, browse, and download.
 
-Network work (search, metadata, downloads, thumbnail images) all runs on
-QThreadPool workers so the UI stays responsive.
+All network work runs on QThreadPool workers so the UI stays responsive.
 """
 
 from __future__ import annotations
@@ -38,86 +36,39 @@ import engine
 
 CARD_THUMB = QSize(124, 70)
 HERO_THUMB = QSize(220, 124)
+USER_AGENT = "Mozilla/5.0"
+THUMB_TIMEOUT = 10
+AUDIO_FORMATS = (
+    ("MP3", "mp3"),
+    ("M4A", "m4a"),
+    ("Opus", "opus"),
+    ("FLAC", "flac"),
+    ("WAV", "wav"),
+    ("Original (no re-encode)", None),
+)
 
 
-# --------------------------------------------------------------------------- #
-# Worker plumbing
-# --------------------------------------------------------------------------- #
 class WorkerSignals(QObject):
     finished = Signal(object)
     error = Signal(str)
     progress = Signal(dict)
 
 
-class QueryWorker(QRunnable):
-    """Fetch metadata + formats off the UI thread."""
+class Worker(QRunnable):
+    """Runs `fn(progress_emit)` off the UI thread, emitting its result or error."""
 
-    def __init__(self, url: str):
+    def __init__(self, fn):
         super().__init__()
-        self.url = url
+        self._fn = fn
         self.signals = WorkerSignals()
 
     def run(self):
         try:
-            self.signals.finished.emit(engine.query(self.url))
+            self.signals.finished.emit(self._fn(self.signals.progress.emit))
         except Exception as exc:  # noqa: BLE001
             self.signals.error.emit(str(exc) or traceback.format_exc())
 
 
-class SearchWorker(QRunnable):
-    """Search by title/keywords off the UI thread."""
-
-    def __init__(self, query_text: str, source: str):
-        super().__init__()
-        self.query_text = query_text
-        self.source = source
-        self.signals = WorkerSignals()
-
-    def run(self):
-        try:
-            self.signals.finished.emit(engine.search(self.query_text, self.source))
-        except Exception as exc:  # noqa: BLE001
-            self.signals.error.emit(str(exc) or traceback.format_exc())
-
-
-class DownloadWorker(QRunnable):
-    """Run a download off the UI thread, forwarding progress dicts."""
-
-    def __init__(
-        self,
-        url: str,
-        fmt: str,
-        outdir: str,
-        extract_audio: bool = False,
-        audio_codec: str = "mp3",
-    ):
-        super().__init__()
-        self.url = url
-        self.fmt = fmt
-        self.outdir = outdir
-        self.extract_audio = extract_audio
-        self.audio_codec = audio_codec
-        self.signals = WorkerSignals()
-
-    def run(self):
-        try:
-            engine.download(
-                self.url,
-                self.fmt,
-                self.outdir,
-                progress_hook=self.signals.progress.emit,
-                postprocessor_hook=self.signals.progress.emit,
-                extract_audio=self.extract_audio,
-                audio_codec=self.audio_codec,
-            )
-            self.signals.finished.emit(None)
-        except Exception as exc:  # noqa: BLE001
-            self.signals.error.emit(str(exc) or traceback.format_exc())
-
-
-# --------------------------------------------------------------------------- #
-# Thumbnail loading (cached, async)
-# --------------------------------------------------------------------------- #
 class _ThumbSignals(QObject):
     loaded = Signal(str, object)
 
@@ -131,16 +82,16 @@ class ThumbnailLoader(QRunnable):
     def run(self):
         data = None
         try:
-            req = urllib.request.Request(self.url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            req = urllib.request.Request(self.url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=THUMB_TIMEOUT) as resp:
                 data = resp.read()
-        except Exception:  # noqa: BLE001 - a missing image shouldn't break the UI
+        except Exception:  # noqa: BLE001
             data = None
         self.signals.loaded.emit(self.url, data)
 
 
 class ThumbnailManager(QObject):
-    """Fetches images once, caches the QPixmap, and fans out to all callers."""
+    """Fetches each image once, caches the QPixmap, and fans out to callers."""
 
     def __init__(self, pool: QThreadPool):
         super().__init__()
@@ -174,19 +125,19 @@ class ThumbnailManager(QObject):
             cb(pix)
 
 
-def _rounded_scaled(pix: QPixmap, size: QSize) -> QPixmap:
-    """Scale a pixmap to fill `size`, cropping the overflow (cover-fit)."""
+def _cover_scaled(pix: QPixmap, size: QSize) -> QPixmap:
     scaled = pix.scaled(size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
     x = max(0, (scaled.width() - size.width()) // 2)
     y = max(0, (scaled.height() - size.height()) // 2)
     return scaled.copy(x, y, size.width(), size.height())
 
 
-# --------------------------------------------------------------------------- #
-# Result card
-# --------------------------------------------------------------------------- #
+def _join(*parts: str) -> str:
+    return "   ·   ".join(p for p in parts if p)
+
+
 class ResultCard(QFrame):
-    """A clickable search result: thumbnail + title + uploader/duration."""
+    """A clickable search result: thumbnail, title, uploader and duration."""
 
     clicked = Signal(str)
 
@@ -211,8 +162,7 @@ class ResultCard(QFrame):
         title = QLabel(result.title)
         title.setObjectName("cardTitle")
         title.setWordWrap(True)
-        sub_text = "   ·   ".join(p for p in (result.uploader, result.duration_str) if p)
-        sub = QLabel(sub_text)
+        sub = QLabel(_join(result.uploader, result.duration_str))
         sub.setObjectName("cardSub")
         info.addWidget(title)
         info.addWidget(sub)
@@ -224,16 +174,13 @@ class ResultCard(QFrame):
 
     def _set_thumb(self, pix: QPixmap):
         self.thumb.setText("")
-        self.thumb.setPixmap(_rounded_scaled(pix, CARD_THUMB))
+        self.thumb.setPixmap(_cover_scaled(pix, CARD_THUMB))
 
-    def mousePressEvent(self, event):  # noqa: N802 - Qt override
+    def mousePressEvent(self, event):  # noqa: N802
         self.clicked.emit(self.url)
         super().mousePressEvent(event)
 
 
-# --------------------------------------------------------------------------- #
-# Main window
-# --------------------------------------------------------------------------- #
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -251,10 +198,16 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(14)
+        root.addLayout(self._build_search_bar())
+        root.addLayout(self._build_content(), 1)
+        root.addWidget(self._build_actions())
 
-        # ============================================================
-        # Zone 1 — search bar (pinned to the top)
-        # ============================================================
+        self.setCentralWidget(central)
+        self.setStatusBar(QStatusBar())
+        self.status("Search for a title, or paste a link to begin.")
+        self.set_busy(False)
+
+    def _build_search_bar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
         bar.setSpacing(8)
         self.url_input = QLineEdit()
@@ -262,25 +215,20 @@ class MainWindow(QMainWindow):
         self.url_input.setPlaceholderText("Search a title, or paste a URL…")
         self.url_input.returnPressed.connect(self.on_query)
         self.source_combo = QComboBox()
-        self.source_combo.addItems(list(engine.SEARCH_PREFIXES.keys()))
+        self.source_combo.addItems(list(engine.SEARCH_PREFIXES))
         self.source_combo.setToolTip("Where to search when you type a title")
         self.query_btn = QPushButton("Go")
         self.query_btn.clicked.connect(self.on_query)
         bar.addWidget(self.url_input, 1)
         bar.addWidget(self.source_combo)
         bar.addWidget(self.query_btn)
-        root.addLayout(bar)
+        return bar
 
-        # ============================================================
-        # Zone 2 — content area (absorbs all spare vertical space). Exactly
-        # one of placeholder / results / detail+table is visible at a time;
-        # the visible stretchy one fills the area so nothing floats.
-        # ============================================================
+    def _build_content(self) -> QVBoxLayout:
         content = QVBoxLayout()
         content.setContentsMargins(0, 0, 0, 0)
         content.setSpacing(12)
 
-        # Empty-state hint (shown until the first search/load).
         self.placeholder = QLabel(
             "Search for a song or video above,\nor paste a link to get started."
         )
@@ -288,19 +236,17 @@ class MainWindow(QMainWindow):
         self.placeholder.setAlignment(Qt.AlignCenter)
         content.addWidget(self.placeholder, 1)
 
-        # Search results (scrollable cards).
         self.results_scroll = QScrollArea()
         self.results_scroll.setWidgetResizable(True)
-        self.results_container = QWidget()
-        self.results_layout = QVBoxLayout(self.results_container)
+        results_container = QWidget()
+        self.results_layout = QVBoxLayout(results_container)
         self.results_layout.setContentsMargins(0, 0, 6, 0)
         self.results_layout.setSpacing(8)
         self.results_layout.addStretch()
-        self.results_scroll.setWidget(self.results_container)
+        self.results_scroll.setWidget(results_container)
         self.results_scroll.hide()
         content.addWidget(self.results_scroll, 1)
 
-        # Selected-video detail (hero image + title).
         self.detail = QWidget()
         detail_row = QHBoxLayout(self.detail)
         detail_row.setContentsMargins(0, 0, 0, 0)
@@ -324,7 +270,6 @@ class MainWindow(QMainWindow):
         self.detail.hide()
         content.addWidget(self.detail)
 
-        # Formats table.
         self.formats_label = QLabel("Formats")
         self.formats_label.setObjectName("sectionLabel")
         self.formats_label.hide()
@@ -341,17 +286,13 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
         self.table.hide()
         content.addWidget(self.table, 1)
+        return content
 
-        root.addLayout(content, 1)
-
-        # ============================================================
-        # Zone 3 — action bar (pinned to the bottom; only shown once a
-        # video is loaded and there's something to download).
-        # ============================================================
+    def _build_actions(self) -> QWidget:
         self.actions = QWidget()
-        actions_col = QVBoxLayout(self.actions)
-        actions_col.setContentsMargins(0, 0, 0, 0)
-        actions_col.setSpacing(10)
+        col = QVBoxLayout(self.actions)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(10)
 
         dir_row = QHBoxLayout()
         dir_row.setSpacing(8)
@@ -362,7 +303,7 @@ class MainWindow(QMainWindow):
         self.dir_btn.clicked.connect(self.on_choose_dir)
         dir_row.addWidget(self.dir_label, 1)
         dir_row.addWidget(self.dir_btn)
-        actions_col.addLayout(dir_row)
+        col.addLayout(dir_row)
 
         dl_row = QHBoxLayout()
         dl_row.setSpacing(8)
@@ -374,17 +315,9 @@ class MainWindow(QMainWindow):
         self.audio_btn = QPushButton("🎵  Best audio")
         self.audio_btn.setToolTip("Highest-quality audio in the chosen format")
         self.audio_btn.clicked.connect(self.on_download_audio)
-        # Audio container/codec for the "Best audio" button.
         self.audio_format = QComboBox()
         self.audio_format.setToolTip("Audio format for the Best audio button")
-        for label, codec in (
-            ("MP3", "mp3"),
-            ("M4A", "m4a"),
-            ("Opus", "opus"),
-            ("FLAC", "flac"),
-            ("WAV", "wav"),
-            ("Original (no re-encode)", None),
-        ):
+        for label, codec in AUDIO_FORMATS:
             self.audio_format.addItem(label, codec)
         self.selected_btn = QPushButton("Download selected")
         self.selected_btn.setObjectName("secondary")
@@ -394,22 +327,16 @@ class MainWindow(QMainWindow):
         dl_row.addWidget(self.audio_format)
         dl_row.addWidget(self.selected_btn)
         dl_row.addStretch()
-        actions_col.addLayout(dl_row)
+        col.addLayout(dl_row)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setTextVisible(False)
-        actions_col.addWidget(self.progress)
+        col.addWidget(self.progress)
 
         self.actions.hide()
-        root.addWidget(self.actions)
+        return self.actions
 
-        self.setCentralWidget(central)
-        self.setStatusBar(QStatusBar())
-        self.status("Search for a title, or paste a link to begin.")
-        self.set_busy(False)
-
-    # ---- helpers ----
     def set_busy(self, busy: bool):
         for w in (
             self.query_btn,
@@ -423,21 +350,19 @@ class MainWindow(QMainWindow):
     def status(self, msg: str):
         self.statusBar().showMessage(msg)
 
+    def _run(self, fn, on_done, on_progress=None) -> None:
+        worker = Worker(fn)
+        worker.signals.finished.connect(on_done)
+        worker.signals.error.connect(self.on_error)
+        if on_progress is not None:
+            worker.signals.progress.connect(on_progress)
+        self.pool.start(worker)
+
     def _clear_results(self):
-        while self.results_layout.count() > 1:  # keep the trailing stretch
+        while self.results_layout.count() > 1:
             item = self.results_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-
-    # ---- query / search ----
-    def on_query(self):
-        text = self.url_input.text().strip()
-        if not text:
-            return
-        if engine.looks_like_url(text):
-            self.start_query(text)
-        else:
-            self.start_search(text)
 
     def _show_results_mode(self):
         self.placeholder.hide()
@@ -455,15 +380,22 @@ class MainWindow(QMainWindow):
         self.table.show()
         self.actions.show()
 
+    def on_query(self):
+        text = self.url_input.text().strip()
+        if not text:
+            return
+        if engine.looks_like_url(text):
+            self.start_query(text)
+        else:
+            self.start_search(text)
+
     def start_search(self, text: str):
+        source = self.source_combo.currentText()
         self.set_busy(True)
-        self.status(f"Searching {self.source_combo.currentText()} for “{text}”…")
+        self.status(f"Searching {source} for “{text}”…")
         self._clear_results()
         self._show_results_mode()
-        worker = SearchWorker(text, self.source_combo.currentText())
-        worker.signals.finished.connect(self.on_search_done)
-        worker.signals.error.connect(self.on_error)
-        self.pool.start(worker)
+        self._run(lambda _p: engine.search(text, source), self.on_search_done)
 
     def on_search_done(self, results: list):
         self.set_busy(False)
@@ -485,10 +417,7 @@ class MainWindow(QMainWindow):
         self.set_busy(True)
         self.status("Loading formats…")
         self.table.setRowCount(0)
-        worker = QueryWorker(url)
-        worker.signals.finished.connect(self.on_query_done)
-        worker.signals.error.connect(self.on_error)
-        self.pool.start(worker)
+        self._run(lambda _p: engine.query(url), self.on_query_done)
 
     def on_query_done(self, info: engine.VideoInfo):
         self.set_busy(False)
@@ -496,25 +425,22 @@ class MainWindow(QMainWindow):
         self.formats = info.formats
 
         self.meta_title.setText(info.title)
-        sub = "   ·   ".join(p for p in (info.uploader, info.duration_str) if p)
-        self.meta_sub.setText(sub)
-        self.hero.clear()
+        self.meta_sub.setText(_join(info.uploader, info.duration_str))
         self.hero.setText("🎬")
         if info.thumbnail:
             self.thumbs.get(info.thumbnail, self._set_hero)
 
         self.table.setRowCount(len(info.formats))
         for row, f in enumerate(info.formats):
-            cells = [f.format_id, f.kind, f.resolution, f.ext, f.filesize_str, f.note]
+            cells = (f.format_id, f.kind, f.resolution, f.ext, f.filesize_str, f.note)
             for col, text in enumerate(cells):
                 self.table.setItem(row, col, QTableWidgetItem(str(text)))
-        self.status(f"{len(info.formats)} formats — pick one or hit Download best")
+        self.status(f"{len(info.formats)} formats — pick one or use Best video / Best audio")
 
     def _set_hero(self, pix: QPixmap):
         self.hero.setText("")
-        self.hero.setPixmap(_rounded_scaled(pix, HERO_THUMB))
+        self.hero.setPixmap(_cover_scaled(pix, HERO_THUMB))
 
-    # ---- download ----
     def on_choose_dir(self):
         d = QFileDialog.getExistingDirectory(self, "Choose download folder", self.outdir)
         if d:
@@ -524,7 +450,7 @@ class MainWindow(QMainWindow):
     def on_download_selected(self):
         row = self.table.currentRow()
         if row < 0:
-            self.status("Select a format row first, or use 'Download best'.")
+            self.status("Select a format row first, or use Best video / Best audio.")
             return
         fmt = self.formats[row].format_id
         if self.formats[row].kind == "video only":
@@ -534,7 +460,6 @@ class MainWindow(QMainWindow):
     def on_download_audio(self):
         codec = self.audio_format.currentData()
         if codec is None:
-            # Keep the source audio stream untouched (lossless from source).
             self.start_download("bestaudio/best")
         else:
             self.start_download("bestaudio/best", extract_audio=True, audio_codec=codec)
@@ -543,34 +468,35 @@ class MainWindow(QMainWindow):
         if not self.current_url:
             self.status("Load a video first.")
             return
+        url, outdir = self.current_url, self.outdir
         self.set_busy(True)
         self.progress.setValue(0)
-        if extract_audio:
-            self.status(f"Downloading audio ({audio_codec})…")
-        else:
-            self.status("Downloading…")
-        worker = DownloadWorker(
-            self.current_url, fmt, self.outdir, extract_audio, audio_codec
+        self.status(f"Downloading audio ({audio_codec})…" if extract_audio else "Downloading…")
+        self._run(
+            lambda progress: engine.download(
+                url,
+                fmt,
+                outdir,
+                progress_hook=progress,
+                postprocessor_hook=progress,
+                extract_audio=extract_audio,
+                audio_codec=audio_codec,
+            ),
+            self.on_download_done,
+            self.on_progress,
         )
-        worker.signals.progress.connect(self.on_progress)
-        worker.signals.finished.connect(self.on_download_done)
-        worker.signals.error.connect(self.on_error)
-        self.pool.start(worker)
 
     def on_progress(self, d: dict):
         status = d.get("status")
         if status == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
-            done = d.get("downloaded_bytes", 0)
             if total:
-                self.progress.setValue(int(done / total * 100))
-            speed = d.get("speed")
-            eta = d.get("eta")
+                self.progress.setValue(int(d.get("downloaded_bytes", 0) / total * 100))
             parts = []
-            if speed:
-                parts.append(f"{speed / 1_000_000:.1f} MB/s")
-            if eta:
-                parts.append(f"ETA {int(eta)}s")
+            if d.get("speed"):
+                parts.append(f"{d['speed'] / 1_000_000:.1f} MB/s")
+            if d.get("eta"):
+                parts.append(f"ETA {int(d['eta'])}s")
             self.status("Downloading…  " + "   ".join(parts))
         elif status == "finished":
             self.progress.setValue(100)
@@ -585,16 +511,13 @@ class MainWindow(QMainWindow):
         self.set_busy(False)
         self.status(f"Error: {msg}")
 
-    def closeEvent(self, event):  # noqa: N802 - Qt override
-        # Let in-flight thumbnail/search workers finish before signal objects
-        # are torn down, so they don't emit into deleted C++ objects.
+    def closeEvent(self, event):  # noqa: N802
         self.pool.clear()
         self.pool.waitForDone(2000)
         super().closeEvent(event)
 
 
 def resource_path(name: str) -> str:
-    """Resolve a bundled resource, both in dev and inside a PyInstaller binary."""
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, name)
 
@@ -608,26 +531,15 @@ def load_stylesheet() -> str:
 
 
 def configure_ffmpeg():
-    """Point yt-dlp at a bundled ffmpeg if one shipped beside this binary."""
+    """Point yt-dlp at a bundled ffmpeg, if one shipped with the binary."""
     exe = "ffmpeg.exe" if sys.platform.startswith("win") else "ffmpeg"
-    # PyInstaller unpacks --add-binary files into _MEIPASS; also check next to
-    # the executable for onedir builds.
-    candidates = [
-        getattr(sys, "_MEIPASS", None),
-        os.path.dirname(sys.executable),
-    ]
-    for base in candidates:
+    for base in (getattr(sys, "_MEIPASS", None), os.path.dirname(sys.executable)):
         if base and os.path.exists(os.path.join(base, exe)):
             engine.FFMPEG_LOCATION = base
             return
 
 
 def main():
-    # pip's PySide6 ships its own Qt and doesn't see the system's KDE/GTK
-    # platform integration, so QFileDialog falls back to Qt's own (ugly) dialog.
-    # Routing through the xdg-desktop-portal plugin (bundled with PySide6) gives
-    # us the real native file chooser. Qt falls back gracefully if no portal is
-    # running, and we don't override an explicit user preference.
     if sys.platform.startswith("linux"):
         os.environ.setdefault("QT_QPA_PLATFORMTHEME", "xdgdesktopportal")
 
