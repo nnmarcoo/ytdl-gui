@@ -2,12 +2,12 @@
 
 A small PySide6 desktop GUI over [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 Search by title or paste a URL, browse thumbnail results, and download best
-video or audio — no CLI flags. Graphite dark theme.
+video or audio - no CLI flags. Graphite dark theme.
 
 ## Install
 
 Grab a self-contained binary from the [Releases](../../releases) page (Python
-and ffmpeg bundled — nothing else to install):
+and ffmpeg bundled - nothing else to install):
 
 - **Windows:** download and run `ytdl-gui-windows.exe`.
 - **Linux:** download `ytdl-gui-linux`, then:
