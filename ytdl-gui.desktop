@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=ytdl-gui
+Comment=Query and download videos with yt-dlp
+Exec=/home/feller/Documents/GitHub/ytdl-gui/run.sh
+Icon=video-x-generic
+Terminal=false
+Categories=AudioVideo;Network;Utility;

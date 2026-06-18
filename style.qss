@@ -1,0 +1,137 @@
+/* ytdl-gui — graphite dark theme (monochrome) */
+
+* {
+    font-family: "Inter", "Segoe UI", "Helvetica Neue", sans-serif;
+    font-size: 14px;
+    color: #e7e8ea;
+}
+
+QMainWindow, QWidget {
+    background-color: #131418;
+}
+
+/* ---- Search bar ---- */
+QLineEdit#search {
+    background: #1c1e24;
+    border: 1px solid #2a2d35;
+    border-radius: 10px;
+    padding: 11px 14px;
+    selection-background-color: #3a3f4b;
+}
+QLineEdit#search:focus {
+    border: 1px solid #5b6270;
+}
+
+QComboBox {
+    background: #1c1e24;
+    border: 1px solid #2a2d35;
+    border-radius: 10px;
+    padding: 9px 12px;
+}
+QComboBox:hover { border: 1px solid #4b5160; }
+QComboBox::drop-down { border: none; width: 22px; }
+QComboBox QAbstractItemView {
+    background: #1c1e24;
+    border: 1px solid #2a2d35;
+    border-radius: 8px;
+    selection-background-color: #2e323c;
+    outline: none;
+}
+
+/* ---- Buttons ---- */
+/* Primary action: light "graphite-white" with dark text. */
+QPushButton {
+    background: #e8e9ec;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 18px;
+    font-weight: 600;
+    color: #16181d;
+}
+QPushButton:hover { background: #ffffff; }
+QPushButton:pressed { background: #c7cad1; }
+QPushButton:disabled { background: #2a2d35; color: #6a6f7b; }
+
+/* Secondary action: subtle dark chip. */
+QPushButton#secondary {
+    background: #23262e;
+    color: #e7e8ea;
+    font-weight: 500;
+}
+QPushButton#secondary:hover { background: #2d313a; }
+QPushButton#secondary:pressed { background: #1c1e24; }
+
+/* ---- Result cards ---- */
+QFrame#card {
+    background: #1a1c22;
+    border: 1px solid #23262e;
+    border-radius: 12px;
+}
+QFrame#card:hover {
+    border: 1px solid #4b5160;
+    background: #1e2129;
+}
+QLabel#cardTitle { font-weight: 600; font-size: 14px; }
+QLabel#cardSub { color: #8b909c; font-size: 12px; }
+QLabel#thumb {
+    background: #0b0c0f;
+    border-radius: 8px;
+    font-size: 26px;
+}
+
+/* ---- Empty-state hint ---- */
+QLabel#placeholder {
+    color: #5b606b;
+    font-size: 15px;
+    line-height: 150%;
+}
+
+/* ---- Selected-video detail ---- */
+QLabel#hero { background: #0b0c0f; border-radius: 12px; }
+QLabel#metaTitle { font-size: 17px; font-weight: 700; }
+QLabel#metaSub { color: #8b909c; font-size: 13px; }
+QLabel#sectionLabel { color: #8b909c; font-size: 12px; font-weight: 600; }
+
+/* ---- Scroll areas ---- */
+QScrollArea { background: transparent; border: none; }
+QScrollArea > QWidget > QWidget { background: transparent; }
+
+/* ---- Formats table ---- */
+QTableWidget {
+    background: #1a1c22;
+    border: 1px solid #23262e;
+    border-radius: 10px;
+    gridline-color: #23262e;
+    outline: none;
+}
+QHeaderView::section {
+    background: #1c1e24;
+    color: #8b909c;
+    padding: 9px;
+    border: none;
+    border-bottom: 1px solid #2a2d35;
+    font-weight: 600;
+}
+QTableWidget::item { padding: 7px; border: none; }
+QTableWidget::item:selected { background: #2e323c; color: #ffffff; }
+
+/* ---- Progress ---- */
+QProgressBar {
+    background: #1c1e24;
+    border: none;
+    border-radius: 8px;
+    height: 18px;
+    text-align: center;
+    color: #e7e8ea;
+}
+QProgressBar::chunk { background: #cdd0d6; border-radius: 8px; }
+
+QStatusBar { color: #8b909c; }
+QStatusBar::item { border: none; }
+
+/* ---- Scrollbars ---- */
+QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
+QScrollBar::handle:vertical { background: #2f323b; border-radius: 5px; min-height: 28px; }
+QScrollBar::handle:vertical:hover { background: #434956; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }

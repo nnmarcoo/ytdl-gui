@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+dist/
+ffmpeg*/
+*.tar.xz
+*.mp4
+*.webm
+*.mkv
+*.part
