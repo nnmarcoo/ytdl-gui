@@ -16,7 +16,7 @@ and ffmpeg bundled — nothing else to install):
 
 - **Paste a URL** → Enter to load its formats. **Type a title** → search
   (YouTube or SoundCloud via the dropdown) and click a result card.
-- **🎬 Best video** (mp4) or **🎵 Best audio** in the chosen format (MP3 / M4A /
+- **Best video** (mp4) or **Best audio** in the chosen format (MP3 / M4A /
   Opus / FLAC / WAV / Original). Or pick a row and **Download selected**.
 
 ## Run from source
